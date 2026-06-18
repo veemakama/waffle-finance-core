@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
-import { HTLCEscrow } from "../../typechain-types";
+import type { HTLCEscrow, TestERC20 } from "../typechain-types";
 
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 const TIMELOCK = 600; // 10 minutes
@@ -207,7 +207,7 @@ describe("HTLCEscrow v2", () => {
 
       const tx = await escrow.connect(relayer).claimOrder(1, preimage);
       const receipt = await tx.wait();
-      const gas = receipt!.gasUsed * receipt!.gasPrice!;
+      const gas = BigInt(receipt!.gasUsed) * BigInt(receipt!.gasPrice ?? 0n);
 
       const beneficiaryAfter = await ethers.provider.getBalance(beneficiary.address);
       const relayerAfter = await ethers.provider.getBalance(relayer.address);
@@ -340,7 +340,7 @@ describe("HTLCEscrow v2", () => {
 
       const tx = await escrow.connect(cleaner).refundOrder(1);
       const receipt = await tx.wait();
-      const gas = receipt!.gasUsed * receipt!.gasPrice!;
+      const gas = BigInt(receipt!.gasUsed) * BigInt(receipt!.gasPrice ?? 0n);
 
       expect(await ethers.provider.getBalance(refundAddr)).to.equal(refundBefore + AMOUNT);
       expect(await ethers.provider.getBalance(cleaner.address) + gas).to.equal(

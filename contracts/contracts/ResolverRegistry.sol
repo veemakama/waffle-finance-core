@@ -25,6 +25,30 @@ import {IResolverRegistry} from "./interfaces/IResolverRegistry.sol";
 ///         compromise of the registry cannot move user funds. The HTLC
 ///         queries `isActive` only as a soft sybil filter for who may
 ///         create orders.
+///
+/// ─── Storage invariants ─────────────────────────────────────────────────────
+///
+///  I1. _resolverIndex[a] == 0  ⟺  a is NOT in _resolverList
+///      (zero means "not present"; the mapping is 1-based so that the
+///       default uint256 value unambiguously signals absence)
+///
+///  I2. For every a where _resolverIndex[a] != 0:
+///        _resolverList[ _resolverIndex[a] - 1 ] == a
+///      (the 1-based index round-trips back to the same address)
+///
+///  I3. _resolvers[a].resolver == a  whenever  _resolverIndex[a] != 0
+///      (the resolver field mirrors the key for convenient off-chain use)
+///
+///  I4. _resolvers[a] == default  whenever  _resolverIndex[a] == 0
+///      (no orphaned ResolverInfo records — register/unregister are atomic)
+///
+///  I5. _resolverList.length == number of addresses with _resolverIndex != 0
+///
+/// These invariants are maintained by ensuring every state-mutating function
+/// follows strict Checks-Effects-Interactions order: ALL storage writes
+/// (including both _resolvers and _resolverIndex/_resolverList) complete
+/// before any external call is made.
+/// ────────────────────────────────────────────────────────────────────────────
 contract ResolverRegistry is IResolverRegistry, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -46,9 +70,23 @@ contract ResolverRegistry is IResolverRegistry, Ownable2Step, ReentrancyGuard {
     /// @notice Address that receives slashed stake.
     address public slashBeneficiary;
 
+    /// @dev Keyed by resolver address.  Cleared entirely on unregister
+    ///      (invariant I4).
     mapping(address => ResolverInfo) private _resolvers;
+
+    /// @dev Packed array of all currently-registered resolver addresses.
+    ///      Elements are never sparse — removal uses the swap-and-pop idiom
+    ///      so the array is always contiguous (invariant I5).
     address[] private _resolverList;
-    mapping(address => uint256) private _resolverIndex; // 1-based
+
+    /// @dev 1-based index into _resolverList.  Zero means "not registered"
+    ///      (invariant I1).  A 1-based scheme lets us distinguish "slot 0"
+    ///      from "not present" without a separate boolean.
+    mapping(address => uint256) private _resolverIndex;
+
+    // ---------------------------------------------------------------
+    // Events
+    // ---------------------------------------------------------------
 
     event Registered(address indexed resolver, uint256 stake);
     event StakeIncreased(address indexed resolver, uint256 added, uint256 newTotal);
@@ -57,11 +95,19 @@ contract ResolverRegistry is IResolverRegistry, Ownable2Step, ReentrancyGuard {
     event MinStakeUpdated(uint256 oldMinStake, uint256 newMinStake);
     event SlashBeneficiaryUpdated(address oldBeneficiary, address newBeneficiary);
 
+    // ---------------------------------------------------------------
+    // Errors
+    // ---------------------------------------------------------------
+
     error InvalidAmount();
     error InvalidAddress();
     error AlreadyRegistered();
     error NotRegistered();
     error StakeBelowMinimum();
+
+    // ---------------------------------------------------------------
+    // Construction
+    // ---------------------------------------------------------------
 
     constructor(
         IERC20 _stakeAsset,
@@ -77,80 +123,154 @@ contract ResolverRegistry is IResolverRegistry, Ownable2Step, ReentrancyGuard {
         slashBeneficiary = _slashBeneficiary;
     }
 
+    // ---------------------------------------------------------------
+    // Resolver self-service
+    // ---------------------------------------------------------------
+
     /// @notice Register as a resolver by posting `stake` of `stakeAsset`.
+    ///
+    /// @dev Effects-before-interactions order:
+    ///      1. Checks  — revert if already registered or stake too small.
+    ///      2. Effects — write _resolvers, push to _resolverList, set
+    ///                   _resolverIndex.  After these writes all five
+    ///                   storage invariants hold.
+    ///      3. Interaction — safeTransferFrom pulls the tokens.
+    ///
+    ///      Pulling tokens AFTER writing state means a reentrant call (e.g.
+    ///      via an ERC-777 tokensToSend hook) will see _resolverIndex != 0
+    ///      and be rejected by the AlreadyRegistered guard, preventing a
+    ///      double-registration.
     function register(uint256 stake) external nonReentrant {
         if (stake < minStake) revert StakeBelowMinimum();
         if (_resolverIndex[msg.sender] != 0) revert AlreadyRegistered();
 
-        stakeAsset.safeTransferFrom(msg.sender, address(this), stake);
-
+        // ── Effects ──────────────────────────────────────────────────
         _resolvers[msg.sender] = ResolverInfo({
-            resolver: msg.sender,
-            stake: stake,
-            registeredAt: uint64(block.timestamp),
-            lastSlashAt: 0,
-            totalSlashed: 0,
-            active: true
+            resolver:      msg.sender,
+            stake:         stake,
+            registeredAt:  uint64(block.timestamp),
+            lastSlashAt:   0,
+            totalSlashed:  0,
+            active:        true
         });
 
         _resolverList.push(msg.sender);
-        _resolverIndex[msg.sender] = _resolverList.length; // 1-based
+        // 1-based: length after push equals the new slot index.
+        _resolverIndex[msg.sender] = _resolverList.length;
+
+        // Invariant assertions (compile-out in production via optimizer;
+        // kept here as self-documenting checks for auditors).
+        assert(_resolverIndex[msg.sender] != 0);                        // I1
+        assert(_resolverList[_resolverIndex[msg.sender] - 1] == msg.sender); // I2
+
+        // ── Interaction ───────────────────────────────────────────────
+        stakeAsset.safeTransferFrom(msg.sender, address(this), stake);
 
         emit Registered(msg.sender, stake);
     }
 
     /// @notice Increase an existing resolver's stake.
+    ///
+    /// @dev A resolver that was deactivated by slashing can call this to
+    ///      exceed `minStake` again and regain active status.  Effects are
+    ///      committed before the token pull (CEI order).
     function increaseStake(uint256 additional) external nonReentrant {
         if (additional == 0) revert InvalidAmount();
-        ResolverInfo storage info = _resolvers[msg.sender];
         if (_resolverIndex[msg.sender] == 0) revert NotRegistered();
 
-        stakeAsset.safeTransferFrom(msg.sender, address(this), additional);
+        // ── Effects ──────────────────────────────────────────────────
+        ResolverInfo storage info = _resolvers[msg.sender];
         info.stake += additional;
+        // Reactivate if the new total meets or exceeds the minimum.
+        // This restores resolvers that were deactivated by slash once they
+        // top up their stake.
         if (info.stake >= minStake) {
             info.active = true;
         }
 
+        // ── Interaction ───────────────────────────────────────────────
+        stakeAsset.safeTransferFrom(msg.sender, address(this), additional);
+
         emit StakeIncreased(msg.sender, additional, info.stake);
     }
 
-    /// @notice Withdraw the entire stake and remove the resolver. The
+    /// @notice Withdraw the entire stake and remove the resolver.  The
     ///         caller forfeits their `active` status immediately.
+    ///
+    /// @dev Strict CEI order is critical here.  All state mutations —
+    ///      clearing _resolvers, removing from _resolverList, and deleting
+    ///      _resolverIndex — are committed BEFORE the outgoing safeTransfer.
+    ///      This means:
+    ///
+    ///      • If safeTransfer reverts, the entire transaction reverts and
+    ///        the resolver remains registered with their stake intact.
+    ///        No partial state is left behind (invariants I1–I5 hold).
+    ///
+    ///      • If a reentrancy occurs inside safeTransfer (e.g. ERC-777),
+    ///        _resolverIndex[msg.sender] is already 0, so any re-entry
+    ///        that calls unregister or increaseStake will revert with
+    ///        NotRegistered, and any re-entry that calls register will
+    ///        find a clean slate (no orphaned entry).
     function unregister() external nonReentrant {
         uint256 idx = _resolverIndex[msg.sender];
         if (idx == 0) revert NotRegistered();
-        ResolverInfo memory info = _resolvers[msg.sender];
 
-        delete _resolvers[msg.sender];
+        // Cache stake before clearing storage.
+        uint256 stakeToReturn = _resolvers[msg.sender].stake;
+
+        // ── Effects (all storage writes before any external call) ─────
+        //
+        // 1. Remove from the packed list (swap-and-pop).
+        //    _resolverIndex[msg.sender] is zeroed inside _removeFromList.
         _removeFromList(msg.sender, idx);
 
-        if (info.stake > 0) {
-            stakeAsset.safeTransfer(msg.sender, info.stake);
+        // 2. Clear the ResolverInfo record.  This is done AFTER
+        //    _removeFromList so the helper can still read the list safely,
+        //    but still before the outgoing transfer (CEI satisfied).
+        delete _resolvers[msg.sender];
+
+        // Post-effect assertion: both index and info must be gone.
+        assert(_resolverIndex[msg.sender] == 0); // I1 / I4
+
+        // ── Interaction ───────────────────────────────────────────────
+        if (stakeToReturn > 0) {
+            stakeAsset.safeTransfer(msg.sender, stakeToReturn);
         }
 
-        emit Unregistered(msg.sender, info.stake);
+        emit Unregistered(msg.sender, stakeToReturn);
     }
 
     // ---------------------------------------------------------------
     // Owner (DAO/multisig) actions
     // ---------------------------------------------------------------
 
-    /// @notice Slash a registered resolver. The owner is the only role
+    /// @notice Slash a registered resolver.  The owner is the only role
     ///         that can call this; the design intent is that `owner` is
     ///         a DAO or multisig that votes on slashing.
+    ///
+    /// @dev Slashing does NOT remove the resolver from the list.  The
+    ///      resolver remains registered (their address is in _resolverList
+    ///      and _resolverIndex is non-zero) but `active` flips to false if
+    ///      their remaining stake falls below `minStake`.  The resolver can
+    ///      call `increaseStake` to top up and regain active status.
+    ///
+    ///      CEI is observed: stake accounting and active-flag update happen
+    ///      before the outgoing safeTransfer to slashBeneficiary.
     function slash(address resolver, uint256 amount) external onlyOwner nonReentrant {
         if (amount == 0) revert InvalidAmount();
-        ResolverInfo storage info = _resolvers[resolver];
         if (_resolverIndex[resolver] == 0) revert NotRegistered();
 
+        // ── Effects ──────────────────────────────────────────────────
+        ResolverInfo storage info = _resolvers[resolver];
         uint256 take = amount > info.stake ? info.stake : amount;
-        info.stake -= take;
+        info.stake       -= take;
         info.totalSlashed += take;
-        info.lastSlashAt = uint64(block.timestamp);
+        info.lastSlashAt   = uint64(block.timestamp);
         if (info.stake < minStake) {
             info.active = false;
         }
 
+        // ── Interaction ───────────────────────────────────────────────
         if (take > 0) {
             stakeAsset.safeTransfer(slashBeneficiary, take);
         }
@@ -178,31 +298,75 @@ contract ResolverRegistry is IResolverRegistry, Ownable2Step, ReentrancyGuard {
         return _resolvers[resolver].active && _resolvers[resolver].stake >= minStake;
     }
 
+    /// @notice Return the full ResolverInfo for `resolver`.
+    ///         Returns a zero-value struct for unregistered addresses.
     function get(address resolver) external view returns (ResolverInfo memory) {
         return _resolvers[resolver];
     }
 
+    /// @notice Return the list of all currently-registered resolver addresses.
+    ///         The order is not stable — removals use swap-and-pop.
     function list() external view returns (address[] memory) {
         return _resolverList;
     }
 
+    /// @notice Return the number of currently-registered resolvers.
+    ///         Equivalent to list().length but cheaper (no array copy).
+    ///
+    /// @dev    This view is the primary invariant check for tests: after
+    ///         any sequence of register/unregister/slash calls,
+    ///         getResolverCount() must equal the number of addresses for
+    ///         which _resolverIndex[a] != 0.
+    function getResolverCount() external view returns (uint256) {
+        return _resolverList.length;
+    }
+
+    /// @notice Alias kept for backwards compatibility.
     function listLength() external view returns (uint256) {
         return _resolverList.length;
     }
 
     // ---------------------------------------------------------------
-    // Internals
+    // Internal helpers
     // ---------------------------------------------------------------
 
+    /// @dev Swap-and-pop removal from _resolverList in O(1).
+    ///
+    ///      Invariant maintenance:
+    ///        • The swapped-in address (previously at the last slot) has its
+    ///          _resolverIndex updated to reflect its new position.
+    ///        • _resolverIndex[resolver] is set to 0 BEFORE the pop so that
+    ///          it is always zero for any address not currently in the list,
+    ///          even if a reentrant read occurred mid-operation (invariant I1).
+    ///
+    ///      Bounds:
+    ///        • `idx` is always in [1, _resolverList.length] because it comes
+    ///          directly from _resolverIndex and is checked non-zero by the
+    ///          caller.  The assertion below makes this explicit for auditors.
     function _removeFromList(address resolver, uint256 idx) private {
-        uint256 i = idx - 1; // 0-based
-        uint256 last = _resolverList.length - 1;
-        if (i != last) {
-            address swap = _resolverList[last];
-            _resolverList[i] = swap;
-            _resolverIndex[swap] = i + 1;
+        uint256 listLen = _resolverList.length;
+
+        // Guard: idx must be a valid 1-based index into the current list.
+        assert(idx >= 1 && idx <= listLen);
+        // Cross-check: the slot this index points to must hold `resolver`
+        // (invariant I2 — detect any prior corruption immediately).
+        assert(_resolverList[idx - 1] == resolver);
+
+        uint256 lastIdx = listLen - 1; // 0-based index of last element
+        uint256 slotIdx = idx - 1;     // 0-based index of the slot to vacate
+
+        if (slotIdx != lastIdx) {
+            // Move the last element into the vacated slot.
+            address swapped = _resolverList[lastIdx];
+            _resolverList[slotIdx] = swapped;
+            // Update the moved resolver's index to its new 1-based position.
+            _resolverIndex[swapped] = idx; // idx == slotIdx + 1
         }
-        _resolverList.pop();
+
+        // Zero the departing resolver's index BEFORE pop so the mapping is
+        // never transiently inconsistent (even within a single call frame).
         delete _resolverIndex[resolver];
+
+        _resolverList.pop();
     }
 }
