@@ -32,14 +32,16 @@ function mockCoinGeckoSolResponse(ethUsd: number, solUsd: number): Response {
   );
 }
 
-/** Advance vitest's fake timer by `ms` and flush the microtask queue. */
+/** Advance vitest's fake timer by `ms` and flush the full microtask queue.
+ *
+ * The background refresh chain inside _fetchAndStore goes through at least
+ * 5 async hops: fetch resolves → Response.json() resolves → cache.set →
+ * _fetchAndStore returns → .catch/.finally on the inflight promise.
+ * We flush 10 times to be safe across all Node 22/24 event-loop orderings.
+ */
 async function advanceAndFlush(ms: number): Promise<void> {
   vi.advanceTimersByTime(ms);
-  // Drain the full async chain: fetch mock resolves (tick 1), .then on the
-  // Response (tick 2), res.json() resolves (tick 3), cache.set in
-  // _fetchAndCache (tick 4), .finally on the inflight promise (tick 5).
-  // Five ticks covers every async hop inside _fetchFromUpstream.
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     await Promise.resolve();
   }
 }
@@ -52,9 +54,7 @@ describe("QuoteService — SWR caching", () => {
   let fetchMock: MockInstance;
 
   beforeEach(() => {
-    // Only fake Date-related timers. Avoid faking setTimeout/clearTimeout
-    // globally so AbortController and fetch internals are not disrupted.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers();
     fetchMock = vi.spyOn(globalThis, "fetch");
   });
 

@@ -192,25 +192,25 @@ export class QuoteService {
       }
 
       if (age < this.staleTtlMs) {
-        // Stale-but-acceptable — serve immediately and kick off background refresh.
-        this._backgroundRefresh(pair);
+        // Stale-but-acceptable — serve immediately and kick off background
+        // refresh immediately (non-blocking, void the promise).
+        this._triggerBackgroundRefresh(pair);
         return cached;
       }
 
       if (age < this.maxStaleTtlMs) {
-        // Past stale window but within max window — block on inflight or start one.
-        this._backgroundRefresh(pair);
-        return cached; // still safe to serve while refresh runs
+        // Past stale window but within max — same pattern.
+        this._triggerBackgroundRefresh(pair);
+        return cached;
       }
     }
 
     // Cold start or beyond maxStaleTtl — block the caller on a live fetch.
-    // De-dupe: if a request is already in-flight, every concurrent caller
-    // awaits the same promise instead of fanning out to the upstream.
+    // De-dupe: concurrent callers share the same inflight promise.
     const existing = this.inflight.get(pair);
     if (existing) return existing;
 
-    const fetching = this._fetchAndCache(pair);
+    const fetching = this._fetchAndStore(pair);
     this.inflight.set(pair, fetching);
     try {
       return await fetching;
@@ -220,21 +220,21 @@ export class QuoteService {
   }
 
   /**
-   * Trigger a background refresh for `pair`. If a refresh is already in
-   * flight, do nothing (thundering-herd guard).
+   * Start a background refresh immediately if one is not already in-flight.
+   * Failures are logged but never propagated to callers.
    */
-  private _backgroundRefresh(pair: string): void {
+  private _triggerBackgroundRefresh(pair: string): void {
     if (this.inflight.has(pair)) return;
 
-    const refreshing = this._fetchAndCache(pair);
-    this.inflight.set(pair, refreshing);
-    refreshing
-      .catch((err) => {
-        this.log.warn({ err, pair }, "background price refresh failed; keeping stale entry");
-      })
-      .finally(() => {
-        this.inflight.delete(pair);
-      });
+    const p = this._fetchAndStore(pair).catch((err) => {
+      this.log.warn({ err, pair }, "background price refresh failed; keeping stale entry");
+    }).finally(() => {
+      this.inflight.delete(pair);
+    });
+
+    // Cast so Map<string, Promise<CacheEntry>> stays happy — we swallow the
+    // error above so the stored promise never rejects.
+    this.inflight.set(pair, p as unknown as Promise<CacheEntry>);
   }
 
   /**
@@ -242,7 +242,7 @@ export class QuoteService {
    * return it. On failure, store and return a fallback entry so that
    * subsequent calls within maxStaleTtlMs don't hammer the upstream.
    */
-  private async _fetchAndCache(pair: string): Promise<CacheEntry> {
+  private async _fetchAndStore(pair: string): Promise<CacheEntry> {
     try {
       const entry = await this._fetchFromUpstream(pair);
       this.cache.set(pair, entry);
@@ -274,21 +274,10 @@ export class QuoteService {
   private async _fetchFromUpstream(pair: string): Promise<CacheEntry> {
     const ids = this._geckoIds(pair);
 
-    // Use Promise.race for the timeout so fake timers in tests don't
-    // interfere with AbortSignal.timeout's internal timer mechanism.
-    const TIMEOUT_MS = 8_000;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-    let res: Response;
-    try {
-      res = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
-        { signal: controller.signal }
-      );
-    } finally {
-      clearTimeout(timer);
-    }
+    const res = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
+      { signal: AbortSignal.timeout(8_000) }
+    );
 
     if (!res.ok) {
       throw new Error(`CoinGecko returned HTTP ${res.status}`);
