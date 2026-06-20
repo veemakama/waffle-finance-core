@@ -26,7 +26,9 @@ export type SimErrorCode =
   | "OrderNotRefundable"
   | "InvalidPreimage"
   | "Expired"
-  | "NotExpired";
+  | "NotExpired"
+  | "AlreadyClaimed"
+  | "AlreadyRefunded";
 
 export class SimError extends Error {
   constructor(public readonly code: SimErrorCode) {
@@ -36,7 +38,7 @@ export class SimError extends Error {
 }
 
 export interface HtlcSim {
-  readonly name: "evm" | "soroban";
+  readonly name: "evm" | "soroban" | "solana";
   createOrder(input: CreateOrderInput): bigint;
   claimOrder(id: bigint, preimage: Hex): void;
   refundOrder(id: bigint): void;
@@ -133,6 +135,39 @@ export class EvmHtlcSim extends BaseHtlcSim implements HtlcSim {
  */
 export class SorobanHtlcSim extends BaseHtlcSim implements HtlcSim {
   readonly name = "soroban" as const;
+
+  claimOrder(id: bigint, preimage: Hex): void {
+    const o = this.getMutable(id);
+    if (o.status !== "Funded") throw new SimError("OrderNotClaimable");
+    if (this.now > o.timelockAbsolute) throw new SimError("Expired");
+    const sha = sha256(preimage);
+    if (sha !== o.hashlock) {
+      throw new SimError("InvalidPreimage");
+    }
+    o.status = "Claimed";
+    o.finalisedAt = this.now;
+  }
+}
+
+/**
+ * Faithful simulation of the Solana HTLC Anchor program's claim branch.
+ *
+ * Claim semantics mirror the Soroban contract exactly: only sha256(preimage)
+ * is accepted as the valid hashlock.  keccak256-only hashlocks will be
+ * rejected.  This is intentional — the `sol_to_eth` cross-chain route MUST
+ * use sha256 end-to-end to satisfy both the Solana program and the EVM
+ * HTLCEscrow contract's sha256 branch.
+ *
+ * Timelock semantics match the EVM and Soroban simulators: the timelock is an
+ * absolute unix-seconds deadline, refund is only permitted after expiry, and
+ * claim is only permitted before expiry.
+ *
+ * The Solana program uses 12-hour / 24-hour timelocks for the src/dst legs
+ * respectively (see README). This simulator accepts any value within
+ * [MIN_TIMELOCK, MAX_TIMELOCK] to stay chain-agnostic.
+ */
+export class SolanaHtlcSim extends BaseHtlcSim implements HtlcSim {
+  readonly name = "solana" as const;
 
   claimOrder(id: bigint, preimage: Hex): void {
     const o = this.getMutable(id);

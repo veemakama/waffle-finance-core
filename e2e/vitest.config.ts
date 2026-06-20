@@ -19,6 +19,7 @@ export default defineConfig({
       { find: /^@wafflefinance\/sdk\/secrets$/, replacement: path.join(sdkSrc, "secrets/index.ts") },
       { find: /^@wafflefinance\/sdk\/ethereum$/, replacement: path.join(sdkSrc, "ethereum/index.ts") },
       { find: /^@wafflefinance\/sdk\/soroban$/, replacement: path.join(sdkSrc, "soroban/index.ts") },
+      { find: /^@wafflefinance\/sdk\/solana$/, replacement: path.join(sdkSrc, "solana/index.ts") },
       { find: /^@wafflefinance\/sdk\/state-machine$/, replacement: path.join(sdkSrc, "state-machine/index.ts") },
       { find: /^@wafflefinance\/sdk\/types$/, replacement: path.join(sdkSrc, "types/index.ts") },
       { find: /^@wafflefinance\/sdk$/, replacement: path.join(sdkSrc, "index.ts") }

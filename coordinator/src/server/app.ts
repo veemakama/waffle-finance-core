@@ -47,6 +47,8 @@ export function createApp(deps: AppDeps): Express {
   // surfaced through the application's structured log stream.
   app.use("/api", ordersRoutes(deps.orders, deps.log));
   app.use("/api", secretsRoutes(deps.secrets, deps.log));
+  // quotes routes expose /api/quotes/eth-xlm, /api/quotes/eth-sol, and
+  // /api/prices (the aggregated endpoint consumed by the BridgeForm).
   app.use("/api", quotesRoutes(deps.quotes));
 
   // Final error handler — never leak a stack trace to clients.

@@ -213,7 +213,7 @@ export default function BridgeForm({ ethAddress, stellarAddress, solanaAddress, 
   const [exchangeRate, setExchangeRate] = useState<number>(ETH_TO_XLM_RATE);
   const [xlmUsdPrice, setXlmUsdPrice] = useState<number | null>(null);
   const [ethUsdPrice, setEthUsdPrice] = useState<number | null>(null);
-  const [priceSource, setPriceSource] = useState<'coingecko' | 'cache' | 'fallback' | null>(null);
+  const [priceStateness, setPriceStaleness] = useState<'fresh' | 'stale' | 'fallback' | null>(null);
   const [isLoadingRate, setIsLoadingRate] = useState(false);
   const [rateLastUpdated, setRateLastUpdated] = useState<Date | null>(null);
   
@@ -324,7 +324,7 @@ export default function BridgeForm({ ethAddress, stellarAddress, solanaAddress, 
         setExchangeRate(xlmPerEth);
         setEthUsdPrice(ethUsd);
         setXlmUsdPrice(xlmUsd);
-        setPriceSource(body?.source ?? 'coingecko');
+        setPriceStaleness(body?.staleness ?? 'fresh');
         setRateLastUpdated(new Date(body?.fetchedAt ?? Date.now()));
         computeWith({ ethUsd, xlmUsd, solUsd });
       } catch (err) {
@@ -333,7 +333,7 @@ export default function BridgeForm({ ethAddress, stellarAddress, solanaAddress, 
         setExchangeRate(ETH_TO_XLM_RATE);
         setEthUsdPrice(null);
         setXlmUsdPrice(null);
-        setPriceSource('fallback');
+        setPriceStaleness('fallback');
         setRateLastUpdated(new Date());
         computeWith({ ethUsd: 3500, xlmUsd: 0.35, solUsd: 150 });
       } finally {
@@ -1358,16 +1358,25 @@ export default function BridgeForm({ ethAddress, stellarAddress, solanaAddress, 
               <div className="mb-1.5 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-cyan-200">
                   <span>Exchange rate</span>
-                  {priceSource && priceSource !== 'fallback' && (
+                  {priceStateness === 'fresh' && (
                     <span
                       className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-emerald-300"
-                      title={priceSource === 'cache' ? 'Served from 60s server-side cache' : 'Fresh from CoinGecko'}
+                      title="Price data is fresh (within 15s)"
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                       live
                     </span>
                   )}
-                  {priceSource === 'fallback' && (
+                  {priceStateness === 'stale' && (
+                    <span
+                      className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-yellow-300"
+                      title="Price data is stale (15–60s old). A background refresh is in progress."
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                      stale
+                    </span>
+                  )}
+                  {priceStateness === 'fallback' && (
                     <span
                       className="text-[10px] uppercase tracking-wide text-indigo-200"
                       title="The relayer price feed is unreachable; this is a hardcoded estimate."
@@ -1402,7 +1411,12 @@ export default function BridgeForm({ ethAddress, stellarAddress, solanaAddress, 
                   via relayer (CoinGecko, 15s SWR)
                 </div>
               )}
-              {priceSource === 'fallback' && (
+              {priceStateness === 'stale' && (
+                <div className="mt-1 text-[11px] text-yellow-200/70">
+                  Prices refreshing in background — quote is from up to 60s ago and is still safe to use.
+                </div>
+              )}
+              {priceStateness === 'fallback' && (
                 <div className="mt-1 text-[11px] text-indigo-200/80">
                   Live price feed unreachable. Final swap amount will use the relayer's price at execution time and may differ.
                 </div>
