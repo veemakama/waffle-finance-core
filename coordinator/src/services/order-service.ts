@@ -1,72 +1,20 @@
 import type { Logger } from "pino";
-import { z } from "zod";
 import {
   OrdersRepository,
   type OrderRow,
   type AnnounceOrderInput,
-  type Direction,
   type Chain
 } from "../persistence/orders-repo.js";
 import { canTransition } from "../state-machine/order-machine.js";
 import { ordersTotal } from "../metrics.js";
+import { announceSchema, type AnnounceInput } from "../validation/announce.js";
 
-const HEX32 = /^0x[0-9a-fA-F]{64}$/;
-const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-const STELLAR_ADDRESS = /^G[A-Z2-7]{55}$/;
-// Base-58 Solana pubkey: 32–44 alphanumeric chars excluding 0, O, I, l
-const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-
-export const announceSchema = z.object({
-  direction: z.enum(["eth_to_xlm", "xlm_to_eth", "eth_to_sol", "sol_to_eth"]),
-  hashlock: z.string().regex(HEX32, "hashlock must be 0x + 64 hex chars"),
-  srcChain: z.enum(["ethereum", "stellar", "solana"]),
-  srcAddress: z.string(),
-  srcAsset: z.string().min(1),
-  srcAmount: z.string().regex(/^\d+$/, "srcAmount must be a decimal integer string"),
-  srcSafetyDeposit: z.string().regex(/^\d+$/, "srcSafetyDeposit must be a decimal integer string"),
-  dstChain: z.enum(["ethereum", "stellar", "solana"]),
-  dstAddress: z.string(),
-  dstAsset: z.string().min(1),
-  dstAmount: z.string().regex(/^\d+$/, "dstAmount must be a decimal integer string")
-});
-
-export type AnnounceInput = z.infer<typeof announceSchema>;
+// Re-exported so existing importers (routes, services barrel) keep working
+// while the schema itself now lives in the shared validation module.
+export { announceSchema };
+export type { AnnounceInput };
 
 export class OrderValidationError extends Error {}
-
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
-function validateChainAddress(chain: Chain, addr: string): void {
-  if (chain === "ethereum") {
-    if (!HEX_ADDRESS.test(addr)) {
-      throw new OrderValidationError(`${addr} is not a valid Ethereum address`);
-    }
-    if (addr.toLowerCase() === ZERO_ADDRESS) {
-      throw new OrderValidationError("Zero address is not a valid Ethereum address");
-    }
-  }
-  if (chain === "stellar" && !STELLAR_ADDRESS.test(addr)) {
-    throw new OrderValidationError(`${addr} is not a valid Stellar account`);
-  }
-  if (chain === "solana" && !SOLANA_ADDRESS.test(addr)) {
-    throw new OrderValidationError(`${addr} is not a valid Solana address`);
-  }
-}
-
-function validateDirectionAgainstChains(input: AnnounceInput): void {
-  const expected: Record<Direction, { src: Chain; dst: Chain }> = {
-    eth_to_xlm: { src: "ethereum", dst: "stellar" },
-    xlm_to_eth: { src: "stellar",  dst: "ethereum" },
-    eth_to_sol:  { src: "ethereum", dst: "solana"   },
-    sol_to_eth:  { src: "solana",   dst: "ethereum"  },
-  };
-  const want = expected[input.direction];
-  if (want.src !== input.srcChain || want.dst !== input.dstChain) {
-    throw new OrderValidationError(
-      `Direction ${input.direction} requires src=${want.src} and dst=${want.dst}`
-    );
-  }
-}
 
 export class OrderService {
   constructor(
@@ -81,10 +29,9 @@ export class OrderService {
    * `srcOrderId` once they have locked.
    */
   async announce(input: AnnounceInput): Promise<OrderRow> {
-    validateChainAddress(input.srcChain, input.srcAddress);
-    validateChainAddress(input.dstChain, input.dstAddress);
-    validateDirectionAgainstChains(input);
-
+    // Field-shape, address and direction/chain validation is enforced by
+    // `announceSchema` at the route boundary; the service only owns the
+    // business-level uniqueness check below.
     const existing = await this.repo.findByHashlock(input.hashlock);
     if (existing) {
       throw new OrderValidationError(

@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { Logger } from "pino";
 import type { OrderRow } from "../../persistence/orders-repo.js";
 import type { OrderService } from "../../services/order-service.js";
-import { announceSchema, OrderValidationError } from "../../services/order-service.js";
+import { OrderValidationError } from "../../services/order-service.js";
+import { announceSchema } from "../../validation/announce.js";
 import { makeRateLimiter, loadApiKeys, loadTrustedProxies } from "../middleware/ratelimit.js";
 
 function serialiseOrder(order: OrderRow | null) {

@@ -80,6 +80,17 @@ describe("POST /api/orders/announce", () => {
     expect(res.body.error).toBe("validation_error");
   });
 
+  it("returns a structured 400 for a mismatched direction/chain combo", async () => {
+    const app = await freshApp();
+    const res = await request(app)
+      .post("/api/orders/announce")
+      .send({ ...BASE_ANNOUNCE, srcChain: "solana", srcAddress: "11111111111111111111111111111111" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("validation_error");
+    expect(Array.isArray(res.body.details)).toBe(true);
+    expect(res.body.details.some((d: { path: unknown[] }) => d.path.includes("srcChain"))).toBe(true);
+  });
+
   it("returns 429 once the announce rate limit is exceeded", async () => {
     const app = await freshApp();
 

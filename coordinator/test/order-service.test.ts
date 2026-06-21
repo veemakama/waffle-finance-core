@@ -83,25 +83,8 @@ describe("OrderService", () => {
     ).rejects.toThrowError(OrderValidationError);
   });
 
-  it("rejects mismatched direction / chains", async () => {
-    const db = await freshDb();
-    const orders = new OrderService(new OrdersRepository(db), log);
-    await expect(
-      orders.announce({
-        direction: "eth_to_xlm",
-        hashlock: VALID_HASHLOCK,
-        srcChain: "stellar",
-        srcAddress: VALID_STELLAR_ADDR,
-        srcAsset: "native",
-        srcAmount: "1",
-        srcSafetyDeposit: "1",
-        dstChain: "ethereum",
-        dstAddress: VALID_ETH_ADDR,
-        dstAsset: "native",
-        dstAmount: "1"
-      })
-    ).rejects.toThrowError(OrderValidationError);
-  });
+  // Cross-field (direction/chain) and address validation now lives in
+  // `announceSchema` — see announce-schema.test.ts for the full matrix.
 });
 
 describe("SecretService", () => {
