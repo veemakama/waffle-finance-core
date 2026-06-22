@@ -52,6 +52,7 @@ export class SorobanListener {
           cursor: this.cursor,
           limit: 100
         });
+
         for (const ev of events.events) {
           this.log.info(
             { ledger: ev.ledger, txHash: ev.txHash, topics: ev.topic?.length ?? 0 },
@@ -70,6 +71,61 @@ export class SorobanListener {
         this.log.warn({ err }, "Soroban poll failed");
       }
       await new Promise((r) => setTimeout(r, this.cfg.pollIntervalMs));
+    }
+  }
+
+  private async processSorobanEvent(ev: any): Promise<void> {
+    const topicName: string = ev.topic?.[0]?.value ?? ev.topic?.[0]?.str ?? "";
+
+    if (topicName === "OrderCreated") {
+      const hashlock = ev.value?.map?.hashlock ?? ev.value?.hashlock;
+      const orderId = ev.value?.map?.orderId ?? ev.value?.orderId;
+      const timelock = Number(ev.value?.map?.timelock ?? ev.value?.timelock ?? 0);
+      if (!hashlock || !orderId) return;
+      try {
+        const order = await this.orders.findByHashlock(hashlock);
+        if (!order) return;
+        await this.orders.recordSrcLock({
+          publicId: order.publicId,
+          orderId: String(orderId),
+          txHash: ev.txHash,
+          blockNumber: ev.ledger,
+          timelock
+        });
+      } catch (err: any) {
+        if (!err?.message?.includes("cannot record")) {
+          this.log.warn({ err, hashlock }, "Soroban OrderCreated processing error");
+        }
+      }
+    }
+
+    if (topicName === "OrderClaimed") {
+      const preimage = ev.value?.map?.preimage ?? ev.value?.preimage;
+      const orderId = ev.value?.map?.orderId ?? ev.value?.orderId;
+      if (!preimage || !orderId) return;
+      try {
+        const order = await this.orders.findBySrcOrderId("stellar", String(orderId));
+        if (!order) return;
+        await this.orders.recordSecret(order.publicId, preimage, ev.txHash);
+      } catch (err: any) {
+        if (!err?.message?.includes("cannot record")) {
+          this.log.warn({ err }, "Soroban OrderClaimed processing error");
+        }
+      }
+    }
+
+    if (topicName === "OrderRefunded") {
+      const orderId = ev.value?.map?.orderId ?? ev.value?.orderId;
+      if (!orderId) return;
+      try {
+        const order = await this.orders.findBySrcOrderId("stellar", String(orderId));
+        if (!order) return;
+        await this.orders.markStatus(order.publicId, "refunded");
+      } catch (err: any) {
+        if (!err?.message?.includes("cannot transition")) {
+          this.log.warn({ err }, "Soroban OrderRefunded processing error");
+        }
+      }
     }
   }
 }

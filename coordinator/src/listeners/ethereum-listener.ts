@@ -40,10 +40,72 @@ export class EthereumListener {
     const address = this.cfg.ethereum.htlcEscrow;
     this.log.info({ contract: address }, "starting");
 
+    void (async () => {
+      try {
+        const lastBlock = await this.orders.getLastProcessedBlock("ethereum");
+        const latest = await this.client.getBlockNumber();
+        const fromBlock = lastBlock > 0 ? BigInt(lastBlock) : (latest > 1000n ? latest - 1000n : 0n);
+
+        if (fromBlock < latest) {
+          this.log.info({ fromBlock, toBlock: latest }, "replaying historical logs on startup");
+          const createdLogs = await this.client.getLogs({
+            address,
+            event: ORDER_CREATED,
+            fromBlock,
+            toBlock: latest
+          });
+          await this.processCreatedLogs(createdLogs);
+        }
+
+        this.watchNewEvents(address, latest + 1n);
+      } catch (err) {
+        this.log.error({ err }, "failed to initialize Ethereum listener catch-up");
+        this.watchNewEvents(address);
+      }
+    })();
+  }
+
+  private async processCreatedLogs(logs: any[]): Promise<void> {
+    for (const log of logs) {
+      if (log.blockNumber !== null) {
+        listenerLastBlock.set({ chain: "ethereum" }, Number(log.blockNumber));
+      }
+      const hashlock = log.args.hashlock!;
+      try {
+        const order = await this.orders.findByHashlock(hashlock);
+        if (!order) {
+          this.log.info(
+            { hashlock, orderId: log.args.orderId?.toString() },
+            "ETH order observed without local announce"
+          );
+          continue;
+        }
+
+        if (log.removed) {
+          this.log.warn({ hashlock, txHash: log.transactionHash }, "ETH OrderCreated event removed due to reorg");
+          await this.orders.rollbackSrcLock(order.publicId);
+          continue;
+        }
+
+        await this.orders.recordSrcLock({
+          publicId: order.publicId,
+          orderId: log.args.orderId!.toString(),
+          txHash: log.transactionHash,
+          blockNumber: Number(log.blockNumber),
+          timelock: Number(log.args.timelock!)
+        });
+      } catch (err) {
+        this.log.warn({ err, hashlock }, "could not process src lock");
+      }
+    }
+  }
+
+  private watchNewEvents(address: `0x${string}`, fromBlock?: bigint): void {
     this.unwatchers.push(
       this.client.watchEvent({
         address,
         event: ORDER_CREATED,
+        fromBlock,
         onLogs: (logs) => {
           void (async () => {
             const startedAt = Date.now();
@@ -82,6 +144,7 @@ export class EthereumListener {
       this.client.watchEvent({
         address,
         event: ORDER_CLAIMED,
+        fromBlock,
         onLogs: (logs) => {
           const startedAt = Date.now();
           for (const log of logs) {
@@ -92,9 +155,6 @@ export class EthereumListener {
               { orderId: log.args.orderId!.toString(), preimage: log.args.preimage },
               "ETH order claimed"
             );
-            // Secret reveal is recorded by SecretService when a client posts
-            // /secrets/reveal. The listener could also push it forward if it
-            // can match the on-chain order id to a coordinator order.
           }
           observeListenerEventProcessing("ethereum", "OrderClaimed", startedAt);
         }
@@ -105,6 +165,7 @@ export class EthereumListener {
       this.client.watchEvent({
         address,
         event: ORDER_REFUNDED,
+        fromBlock,
         onLogs: (logs) => {
           const startedAt = Date.now();
           for (const log of logs) {
