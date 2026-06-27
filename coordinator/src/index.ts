@@ -52,12 +52,16 @@ async function main(): Promise<void> {
     cfg.pollIntervalMs * 4 // ~1 min at default 15s poll
   );
 
-  // Run stale cleanup once at startup, then daily.
-  void staleCleanup.run();
-  const cleanupInterval = setInterval(
-    () => void staleCleanup.run(),
-    24 * 60 * 60 * 1000 // 24 hours
-  );
+  // Periodic expiry scan: mark src_locked / dst_locked orders as `expired`
+  // once their timelock has passed.  Runs at the same cadence as reconciliation
+  // so expiry is visible within ~1 min at default settings.
+  const runExpiry = (): void => {
+    orders.expireStaleOrders().then((n) => {
+      if (n > 0) log.info({ count: n }, "expired stale orders by timelock");
+    }).catch((err) => log.warn({ err }, "order expiry scan failed"));
+  };
+  void runExpiry();
+  const expiryInterval = setInterval(runExpiry, cfg.pollIntervalMs * 4);
 
   const ethListener = new EthereumListener(cfg, orders, log);
   const sorobanListener = new SorobanListener(cfg, orders, log);
@@ -69,7 +73,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     log.info({ signal }, "shutting down");
     clearInterval(reconcileInterval);
-    clearInterval(cleanupInterval);
+    clearInterval(expiryInterval);
     ethListener.stop();
     sorobanListener.stop();
     solanaListener.stop();
