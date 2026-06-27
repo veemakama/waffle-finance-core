@@ -170,6 +170,7 @@ const SQLITE_MIGRATIONS = [
   "003_secret_encryption.sql",
   "004_query_optimizations.sql",
   "005_schema_migrations.sql",
+  "006_stale_cleanup.sql",
 ] as const;
 
 // Postgres migration files, applied in order.  Migration 005 creates the
@@ -181,6 +182,7 @@ const POSTGRES_MIGRATION_FILES = [
   "003_secret_encryption.sql",
   "004_query_optimizations.sql",
   "005_schema_migrations.sql",
+  "006_stale_cleanup.sql",
 ] as const;
 
 // ── Public helpers ───────────────────────────────────────────────────────────
@@ -260,6 +262,16 @@ function openSqliteDatabase(url: string): Database {
   // Apply the canonical schema (idempotent — uses CREATE TABLE/INDEX IF NOT EXISTS).
   const schema = readFileSync(resolve(__dirname, "schema.sql"), "utf8");
   db.exec(schema);
+
+  // Apply incremental column migrations for tables that already exist.
+  // schema.sql only creates tables IF NOT EXISTS, so new columns added later
+  // must be applied separately.  Each ALTER TABLE is wrapped in a try/catch
+  // so the call is idempotent on databases that already have the column.
+  try {
+    db.exec("ALTER TABLE orders ADD COLUMN archived_at INTEGER");
+  } catch {
+    // Column already present — safe to ignore.
+  }
 
   // Seed migration history for all logical migrations covered by schema.sql.
   // INSERT OR IGNORE makes this safe on existing databases: already-recorded

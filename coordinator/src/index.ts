@@ -10,6 +10,7 @@ import { EthereumListener } from "./listeners/ethereum-listener.js";
 import { SorobanListener } from "./listeners/soroban-listener.js";
 import { SolanaListener } from "./listeners/solana-listener.js";
 import { Reconciler } from "./reconciliation/reconciler.js";
+import { StaleCleanupService } from "./services/stale-cleanup.js";
 import { createReadinessChecks } from "./readiness.js";
 
 async function main(): Promise<void> {
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
   const quotes = new QuoteService(log);
 
   const reconciler = new Reconciler(cfg, orders, log);
+  const staleCleanup = new StaleCleanupService(repo, log);
 
   const app = createApp({
     log,
@@ -50,6 +52,13 @@ async function main(): Promise<void> {
     cfg.pollIntervalMs * 4 // ~1 min at default 15s poll
   );
 
+  // Run stale cleanup once at startup, then daily.
+  void staleCleanup.run();
+  const cleanupInterval = setInterval(
+    () => void staleCleanup.run(),
+    24 * 60 * 60 * 1000 // 24 hours
+  );
+
   const ethListener = new EthereumListener(cfg, orders, log);
   const sorobanListener = new SorobanListener(cfg, orders, log);
   const solanaListener = new SolanaListener(cfg, orders, log);
@@ -60,6 +69,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     log.info({ signal }, "shutting down");
     clearInterval(reconcileInterval);
+    clearInterval(cleanupInterval);
     ethListener.stop();
     sorobanListener.stop();
     solanaListener.stop();

@@ -55,6 +55,7 @@ export interface OrderRow {
   resolverAddress: string | null;
   createdAt: number;
   updatedAt: number;
+  archivedAt: number | null;
 }
 
 export interface AnnounceOrderInput {
@@ -100,6 +101,7 @@ interface OrderDbRow {
   resolver_address: string | null;
   created_at: number;
   updated_at: number;
+  archived_at: number | null;
 }
 
 function rowToOrder(r: OrderDbRow): OrderRow {
@@ -131,7 +133,8 @@ function rowToOrder(r: OrderDbRow): OrderRow {
     secretRevealedTx: r.secret_revealed_tx,
     resolverAddress: r.resolver_address,
     createdAt: r.created_at,
-    updatedAt: r.updated_at
+    updatedAt: r.updated_at,
+    archivedAt: r.archived_at ?? null
   };
 }
 
@@ -387,6 +390,40 @@ export class OrdersRepository {
 
   async rollbackDstLock(publicId: string): Promise<void> {
     await this.run(this.rollbackDst, { publicId });
+  }
+
+  /**
+   * Find announced orders with no source lock that are older than the given
+   * retention window and have not yet been archived.  These are candidates for
+   * soft-delete by the stale cleanup service.
+   */
+  async findStaleAnnounced(retentionWindowSeconds: number): Promise<OrderRow[]> {
+    const cutoff = Math.floor(Date.now() / 1000) - retentionWindowSeconds;
+    const rows = await this.all<OrderDbRow>(
+      this.db.prepare(`
+        SELECT * FROM orders
+        WHERE status = 'announced'
+          AND src_order_id IS NULL
+          AND archived_at IS NULL
+          AND created_at < ?
+      `),
+      cutoff
+    );
+    return rows.map(rowToOrder);
+  }
+
+  /** Soft-delete a single order by stamping it with the current unix time. */
+  async archiveOrder(publicId: string): Promise<void> {
+    await this.run(
+      this.db.prepare(`
+        UPDATE orders
+        SET archived_at = CAST(strftime('%s','now') AS INTEGER),
+            updated_at  = CAST(strftime('%s','now') AS INTEGER)
+        WHERE public_id = ?
+          AND archived_at IS NULL
+      `),
+      publicId
+    );
   }
 
   async getLastProcessedBlock(chain: Chain): Promise<number> {

@@ -129,3 +129,25 @@ export const reconciliationEventsReplayed = new Counter({
   help: "Total on-chain events replayed by the reconciler",
   registers: [registry]
 });
+
+/** Stale cleanup runs (success | failure) */
+export const staleCleanupRuns = new Counter({
+  name: "coordinator_stale_cleanup_runs_total",
+  help: "Total stale order cleanup runs by result",
+  labelNames: ["result"] as const,
+  registers: [registry]
+});
+
+/** Orders archived (soft-deleted) by the stale cleanup service */
+export const staleOrdersArchived = new Counter({
+  name: "coordinator_stale_orders_archived_total",
+  help: "Total stale announced orders archived by the cleanup service",
+  registers: [registry]
+});
+
+/** Unix timestamp of the last completed stale cleanup run */
+export const staleCleanupLastRun = new Gauge({
+  name: "coordinator_stale_cleanup_last_run_timestamp_seconds",
+  help: "Unix timestamp of the most recent stale order cleanup run",
+  registers: [registry]
+});

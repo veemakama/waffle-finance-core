@@ -127,7 +127,7 @@ describe("PostgreSQL Database Compatibility", () => {
     const migrations = await queryMigrations(db);
     expect(migrations.length).toBeGreaterThan(0);
     const version = await getCurrentSchemaVersion(db);
-    expect(version).toBe("005_schema_migrations.sql");
+    expect(version).toBe("006_stale_cleanup.sql");
   });
 
   testBoth("should support all OrdersRepository operations", async (db, dbType) => {
