@@ -90,5 +90,24 @@ export {
   type SolanaSigner,
 } from "./solana/index.js";
 
+// Shared utilities for hex conversion, order ID handling, and serialisation
+export {
+  hexToBuffer,
+  bufferToHex,
+  writeU64LE,
+  readU64LE,
+  readI64LE,
+  hex32ToBuffer,
+  escrowNativeValue,
+  orderIdFromHashlock,
+  hashlockFromOrderId,
+  validateOrderId,
+  validateHashlock,
+  ORDER_ID_PREFIX,
+  isTimeoutTransition,
+  isFailureTransition,
+  estimateTimelockRemaining,
+} from "./shared-utils/index.js";
+
 // Solana — normalised adapter
 export { SolanaHTLCAdapter } from "./solana/adapter.js";

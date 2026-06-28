@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import type { Database } from "./db.js";
 import { canTransition, isTerminal } from "../state-machine/order-machine.js";
 import { dbQueryDuration } from "../metrics.js";
@@ -11,6 +10,13 @@ type AsyncCapableStatement = Statement & {
   getAsync?: (...params: any[]) => Promise<unknown>;
   allAsync?: (...params: any[]) => Promise<unknown[]>;
 };
+
+function orderIdFromHashlock(hashlock: string): string {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(hashlock)) {
+    throw new Error("hashlock must be 0x + 64 hex chars");
+  }
+  return `wf_${hashlock.toLowerCase()}`;
+}
 
 export type OrderStatus =
   | "announced"
@@ -284,7 +290,7 @@ export class OrdersRepository {
 
   /** Returns the public id of the new order. */
   async announce(input: AnnounceOrderInput): Promise<OrderRow> {
-    const publicId = randomBytes(16).toString("hex");
+    const publicId = orderIdFromHashlock(input.hashlock);
     await this.run(this.insertStmt, { publicId, ...input });
     const row = await this.get<OrderDbRow>(this.byPublicId, publicId);
     if (!row) throw new Error("Failed to insert order");

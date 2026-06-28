@@ -5,7 +5,7 @@ import type { OrderRow } from "../../persistence/orders-repo.js";
 import type { OrderService } from "../../services/order-service.js";
 import { OrderValidationError } from "../../services/order-service.js";
 import { announceSchema } from "../../validation/announce.js";
-import { historyAddressSchema } from "../../validation/address.js";
+import { historyAddressSchema, orderIdSchema } from "../../validation/address.js";
 import { makeRateLimiter, loadApiKeys, loadTrustedProxies } from "../middleware/ratelimit.js";
 import { validationError, orderValidationError, notFoundError } from "../errors.js";
 
@@ -106,7 +106,12 @@ export function ordersRoutes(orders: OrderService, log?: Logger): Router {
   });
 
   router.get("/orders/:id", async (req, res, next) => {
-    const id = req.params.id;
+    const idResult = orderIdSchema.safeParse(req.params.id);
+    if (!idResult.success) {
+      res.status(400).json(validationError(idResult.error.errors));
+      return;
+    }
+    const id = idResult.data;
     try {
       const order = await orders.get(id);
       if (!order) {
@@ -127,9 +132,14 @@ export function ordersRoutes(orders: OrderService, log?: Logger): Router {
   });
 
   router.post("/orders/:id/src-locked", async (req, res, next) => {
+    const idResult = orderIdSchema.safeParse(req.params.id);
+    if (!idResult.success) {
+      res.status(400).json(validationError(idResult.error.errors));
+      return;
+    }
     try {
       const body = lockSchema.parse(req.body);
-      await orders.recordSrcLock({ publicId: req.params.id, ...body });
+      await orders.recordSrcLock({ publicId: idResult.data, ...body });
       res.json({ ok: true });
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -145,10 +155,15 @@ export function ordersRoutes(orders: OrderService, log?: Logger): Router {
   });
 
   router.post("/orders/:id/dst-locked", async (req, res, next) => {
+    const idResult = orderIdSchema.safeParse(req.params.id);
+    if (!idResult.success) {
+      res.status(400).json(validationError(idResult.error.errors));
+      return;
+    }
     try {
       const body = lockSchema.extend({ resolver: z.string().nullable().optional() }).parse(req.body);
       await orders.recordDstLock({
-        publicId: req.params.id,
+        publicId: idResult.data,
         orderId: body.orderId,
         txHash: body.txHash,
         blockNumber: body.blockNumber,
