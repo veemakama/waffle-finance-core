@@ -4,9 +4,10 @@ import type { Logger } from "pino";
 import type { SecretService } from "../../services/secret-service.js";
 import { SecretRevealError } from "../../services/secret-errors.js";
 import { makeRateLimiter, loadApiKeys, loadTrustedProxies } from "../middleware/ratelimit.js";
+import type { AbuseDetector } from "../middleware/abuse-detection.js";
 import { validationError, notRevealedError } from "../errors.js";
 
-export function secretsRoutes(secrets: SecretService, log?: Logger): Router {
+export function secretsRoutes(secrets: SecretService, log?: Logger, abuseDetector?: AbuseDetector): Router {
   const router = Router();
 
   const apiKeys = loadApiKeys();
@@ -20,7 +21,8 @@ export function secretsRoutes(secrets: SecretService, log?: Logger): Router {
     name: "secrets/reveal",
     log,
     apiKeys,
-    trustedProxies
+    trustedProxies,
+    abuseDetector
   });
 
   // Secret GET endpoint: 30 reads per IP per minute (lenient — it's a public read).
@@ -30,7 +32,8 @@ export function secretsRoutes(secrets: SecretService, log?: Logger): Router {
     name: "secrets/get",
     log,
     apiKeys,
-    trustedProxies
+    trustedProxies,
+    abuseDetector
   });
 
   const revealSchema = z.object({

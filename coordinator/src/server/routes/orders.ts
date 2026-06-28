@@ -7,6 +7,7 @@ import { OrderValidationError } from "../../services/order-service.js";
 import { announceSchema } from "../../validation/announce.js";
 import { historyAddressSchema } from "../../validation/address.js";
 import { makeRateLimiter, loadApiKeys, loadTrustedProxies } from "../middleware/ratelimit.js";
+import type { AbuseDetector } from "../middleware/abuse-detection.js";
 import { validationError, orderValidationError, notFoundError } from "../errors.js";
 
 function serialiseOrder(order: OrderRow | null) {
@@ -48,7 +49,7 @@ function serialiseOrder(order: OrderRow | null) {
   };
 }
 
-export function ordersRoutes(orders: OrderService, log?: Logger): Router {
+export function ordersRoutes(orders: OrderService, log?: Logger, abuseDetector?: AbuseDetector): Router {
   const router = Router();
 
   const apiKeys = loadApiKeys();
@@ -62,7 +63,8 @@ export function ordersRoutes(orders: OrderService, log?: Logger): Router {
     name: "orders/announce",
     log,
     apiKeys,
-    trustedProxies
+    trustedProxies,
+    abuseDetector
   });
 
   router.post("/orders/announce", announceRateLimit, async (req, res, next) => {
