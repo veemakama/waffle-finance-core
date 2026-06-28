@@ -427,3 +427,52 @@ describe("Rate-limit response headers", () => {
     expect(res.headers["x-ratelimit-reset"]).toBeDefined();
   });
 });
+
+import { SecretStorageError } from "../src/services/secret-errors.js";
+
+describe("Global Error Handler", () => {
+  it("sanitizes hex strings from generic Error in response and logs", async () => {
+    const app = await freshApp();
+    const logSpy = vi.spyOn(log, 'error');
+    
+    const mockService = vi.spyOn(OrderService.prototype, "history").mockImplementation(() => {
+      const err: any = new Error("leak message: 0xabcdef1234567890abcdef");
+      err.customSecret = "0x1234567890abcdef123456";
+      throw err;
+    });
+
+    const res = await request(app).get("/api/orders/history").query({ address: VALID_ETH_ADDR });
+    
+    expect(res.status).toBe(500);
+    expect(res.body.message).toBe("leak message: [REDACTED_SECRET]");
+    
+    expect(logSpy).toHaveBeenCalled();
+    const loggedError = logSpy.mock.calls[0][0].err;
+    expect(loggedError.message).toBe("leak message: [REDACTED_SECRET]");
+    expect(loggedError.customSecret).toBe("[REDACTED_SECRET]");
+    
+    mockService.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("leaves SecretRevealError subclasses intact", async () => {
+    const app = await freshApp();
+    const logSpy = vi.spyOn(log, 'error');
+    
+    const mockService = vi.spyOn(OrderService.prototype, "history").mockImplementation(() => {
+      throw new SecretStorageError("safe message: 0xabcdef1234567890abcdef");
+    });
+
+    const res = await request(app).get("/api/orders/history").query({ address: VALID_ETH_ADDR });
+    
+    expect(res.status).toBe(500);
+    expect(res.body.message).toBe("safe message: 0xabcdef1234567890abcdef");
+    
+    expect(logSpy).toHaveBeenCalled();
+    const loggedError = logSpy.mock.calls[0][0].err;
+    expect(loggedError.message).toBe("safe message: 0xabcdef1234567890abcdef");
+    
+    mockService.mockRestore();
+    logSpy.mockRestore();
+  });
+});

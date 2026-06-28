@@ -14,7 +14,8 @@ import type { SecretService } from "../services/secret-service.js";
 import type { QuoteService } from "../services/quote-service.js";
 import type { ReconciliationStatus } from "../reconciliation/reconciler.js";
 import { requestIdMiddleware, REQUEST_ID_HEADER } from "./middleware/request-id.js";
-import { internalError } from "./errors.js";
+import { sanitizeForLog } from "../utils/sanitize-for-log.js";
+import { SecretRevealError } from "../services/secret-errors.js";
 
 export interface AppDeps {
   log: Logger;
@@ -85,8 +86,11 @@ export function createApp(deps: AppDeps): Express {
       res: express.Response,
       _next: express.NextFunction
     ) => {
-      deps.log.error({ err }, "unhandled error");
-      res.status(500).json(internalError(err.message));
+      const isSafe = err instanceof SecretRevealError;
+      const safeErr = isSafe ? err : sanitizeForLog(err);
+      
+      deps.log.error({ err: safeErr }, "unhandled error");
+      res.status(500).json({ error: "internal_error", message: safeErr.message });
     }
   );
 

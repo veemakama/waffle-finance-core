@@ -1,6 +1,6 @@
 {
   "name": "@wafflefinance/resolver",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Reference resolver implementation for the WaffleFinance cross-chain bridge",
   "type": "module",

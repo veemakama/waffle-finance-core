@@ -32,8 +32,11 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile=false
 
-      - name: Build SDK
-        run: pnpm --filter @wafflefinance/sdk build
+      - name: Build All Packages
+        run: pnpm --filter "@wafflefinance/*" build
+
+      - name: Validate Workspace (Manifests and Exports)
+        run: pnpm run validate:manifests
 
       - name: Typecheck — SDK
         run: pnpm --filter @wafflefinance/sdk exec tsc --noEmit

@@ -46,6 +46,11 @@ The typed error model lives in [`src/services/secret-errors.ts`](src/services/se
 and is extensible: add a `SecretRevealError` subclass and the route layer maps
 it automatically.
 
+## Secure Logging
+
+Preimages (pre-claim) are secret material. The hashlock is NOT secret and shouldn't be redacted.
+Rule for contributors: **Never let a raw Error or request/response body reach a log or HTTP response outside the classified SecretRevealError path without passing through `sanitizeForLog()` first.**
+
 ## Quick start
 
 ```bash

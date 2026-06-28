@@ -133,7 +133,9 @@ e2e/                Cross-chain differential test harness
 
 ## Quick start
 
-Requirements: Node 22.5+, pnpm 9+, Rust + `stellar-cli`, Foundry.
+**Dev container (recommended):** open the repo in VS Code with the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers). VS Code will prompt you to reopen in the container — it installs Node 22, pnpm, Rust, stellar-cli, and Foundry automatically.
+
+**Native setup** — requirements: Node 22.5+, pnpm 8+, Rust stable + `wasm32-unknown-unknown` target, `stellar-cli`, Foundry.
 
 ```bash
 git clone https://github.com/Waffle-finance/waffle-finance-core
@@ -143,14 +145,14 @@ cp env.example .env          # fill in RPC URLs and private keys
 ```
 
 ```bash
-# Build shared SDK
+# Build shared SDK (required before anything else)
 pnpm --filter @wafflefinance/sdk build
 
 # Compile + test Solidity contracts
 pnpm --filter @wafflefinance/contracts exec hardhat test
 
 # Test Soroban contracts
-cd soroban && cargo test --release && cd ..
+cd soroban && cargo test && cd ..
 
 # Start coordinator
 pnpm --filter @wafflefinance/coordinator dev
@@ -158,6 +160,8 @@ pnpm --filter @wafflefinance/coordinator dev
 # Start frontend
 pnpm --filter @wafflefinance/frontend dev
 ```
+
+See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for per-package commands, PostgreSQL setup, Stellar contract deployment, and troubleshooting notes.
 
 ---
 

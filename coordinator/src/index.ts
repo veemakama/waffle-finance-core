@@ -12,13 +12,18 @@ import { SolanaListener } from "./listeners/solana-listener.js";
 import { Reconciler } from "./reconciliation/reconciler.js";
 import { StaleCleanupService } from "./services/stale-cleanup.js";
 import { createReadinessChecks } from "./readiness.js";
+import { retryAsync } from "./retry.js";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = getLogger(cfg.logLevel);
   log.info({ network: cfg.network, port: cfg.port }, "WaffleFinance coordinator starting");
 
-  const db = await openDatabase(cfg.databaseUrl);
+  const db = await retryAsync(() => openDatabase(cfg.databaseUrl), {
+  maxAttempts: 5,
+  baseDelayMs: 500,
+  jitterMs: 200,
+});
   const repo = new OrdersRepository(db);
   const orders = new OrderService(repo, log);
   const secrets = new SecretService(orders, log, cfg.secretStorageKey ?? undefined);
@@ -66,9 +71,11 @@ async function main(): Promise<void> {
   const ethListener = new EthereumListener(cfg, orders, log);
   const sorobanListener = new SorobanListener(cfg, orders, log);
   const solanaListener = new SolanaListener(cfg, orders, log);
-  ethListener.start();
-  sorobanListener.start();
-  solanaListener.start();
+  await Promise.all([
+    retryAsync(() => ethListener.start()),
+    retryAsync(() => sorobanListener.start()),
+    retryAsync(() => solanaListener.start()),
+  ]);
 
   const shutdown = async (signal: string) => {
     log.info({ signal }, "shutting down");

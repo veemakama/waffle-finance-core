@@ -1,6 +1,6 @@
 {
   "name": "@wafflefinance/coordinator",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Reference coordinator for the WaffleFinance cross-chain bridge. Observes both chains, persists order state, and relays secrets. Holds NO user funds.",
   "type": "module",
